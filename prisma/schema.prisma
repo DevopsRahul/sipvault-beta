@@ -1,0 +1,208 @@
+// SipVault database schema (PostgreSQL).
+// Change this file, then run `npm run db:migrate -- --name <change>` locally to create a migration.
+
+generator client {
+  provider = "prisma-client-js"
+  // "native" = your machine, "linux-musl-openssl-3.0.x" = the Alpine Docker image
+  binaryTargets = ["native", "linux-musl-openssl-3.0.x"]
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  CUSTOMER // buys bottles, orders from vault
+  BAR_STAFF // sees and serves orders for one bar
+  BAR_OWNER // staff rights + manages menu, tables, staff of their bar
+  ADMIN // platform admin: creates bars and the product catalog
+}
+
+enum BottleStatus {
+  ACTIVE
+  EMPTY
+  EXPIRED
+}
+
+enum OrderStatus {
+  PLACED // customer ordered, ml is RESERVED on the bottle
+  ACCEPTED // bar is preparing
+  SERVED // poured -> ml actually deducted from bottle
+  REJECTED // bar rejected -> reservation released
+  CANCELLED // customer cancelled before acceptance -> reservation released
+}
+
+enum PurchaseStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+enum LedgerReason {
+  PURCHASE
+  POUR
+  ADJUSTMENT
+  EXPIRY
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  phone        String?
+  passwordHash String
+  dob          DateTime?
+  role         Role      @default(CUSTOMER)
+  // Set for BAR_OWNER / BAR_STAFF: the bar this account works for.
+  barId        String?
+  bar          Bar?      @relation(fields: [barId], references: [id])
+  createdAt    DateTime  @default(now())
+
+  bottles   VaultBottle[]
+  orders    Order[]
+  purchases Purchase[]
+}
+
+model Bar {
+  id        String   @id @default(cuid())
+  name      String
+  address   String?
+  city      String?
+  licenseNo String?
+  // How many days a purchased bottle is kept for the customer.
+  keepDays  Int      @default(90)
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  users     User[]
+  tables    BarTable[]
+  menu      BarProduct[]
+  bottles   VaultBottle[]
+  orders    Order[]
+  purchases Purchase[]
+}
+
+model BarTable {
+  id        String   @id @default(cuid())
+  barId     String
+  bar       Bar      @relation(fields: [barId], references: [id])
+  tableNo   String
+  createdAt DateTime @default(now())
+
+  orders Order[]
+
+  @@unique([barId, tableNo])
+}
+
+// Global catalog (managed by ADMIN).
+model Product {
+  id        String   @id @default(cuid())
+  brand     String
+  name      String
+  category  String // Whisky, Vodka, Rum, Gin, Tequila...
+  volumeMl  Int      @default(750)
+  // Storage key, e.g. "products/uuid.webp". The full URL is built at render time.
+  imageKey  String?
+  createdAt DateTime @default(now())
+
+  barProducts BarProduct[]
+  bottles     VaultBottle[]
+}
+
+// What a bar sells and at what price.
+model BarProduct {
+  id         String  @id @default(cuid())
+  barId      String
+  bar        Bar     @relation(fields: [barId], references: [id])
+  productId  String
+  product    Product @relation(fields: [productId], references: [id])
+  // Price in the smallest currency unit (paise for INR). 250000 = Rs 2,500.00
+  priceMinor Int
+  pegSizeMl  Int     @default(30)
+  active     Boolean @default(true)
+
+  purchases Purchase[]
+
+  @@unique([barId, productId])
+}
+
+// A bottle the customer owns, physically kept at one bar.
+model VaultBottle {
+  id          String       @id @default(cuid())
+  userId      String
+  user        User         @relation(fields: [userId], references: [id])
+  barId       String
+  bar         Bar          @relation(fields: [barId], references: [id])
+  productId   String
+  product     Product      @relation(fields: [productId], references: [id])
+  totalMl     Int
+  remainingMl Int
+  // ml held by orders that are placed but not yet served
+  reservedMl  Int          @default(0)
+  // peg size snapshot at purchase time
+  pegSizeMl   Int          @default(30)
+  status      BottleStatus @default(ACTIVE)
+  purchasedAt DateTime     @default(now())
+  expiresAt   DateTime?
+
+  purchase Purchase?
+  orders   Order[]
+  ledger   PourLedger[]
+
+  @@index([userId])
+  @@index([barId])
+}
+
+model Purchase {
+  id            String         @id @default(cuid())
+  userId        String
+  user          User           @relation(fields: [userId], references: [id])
+  barId         String
+  bar           Bar            @relation(fields: [barId], references: [id])
+  barProductId  String
+  barProduct    BarProduct     @relation(fields: [barProductId], references: [id])
+  amountMinor   Int
+  provider      String // mock | razorpay | stripe
+  paymentRef    String?
+  status        PurchaseStatus @default(PENDING)
+  vaultBottleId String?        @unique
+  vaultBottle   VaultBottle?   @relation(fields: [vaultBottleId], references: [id])
+  createdAt     DateTime       @default(now())
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  vaultBottleId String
+  vaultBottle   VaultBottle @relation(fields: [vaultBottleId], references: [id])
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  barId         String
+  bar           Bar         @relation(fields: [barId], references: [id])
+  tableId       String
+  table         BarTable    @relation(fields: [tableId], references: [id])
+  pegs          Int
+  pourMl        Int
+  note          String?
+  status        OrderStatus @default(PLACED)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  ledger PourLedger[]
+
+  @@index([barId, status])
+  @@index([userId])
+}
+
+// Append-only audit trail of every ml added or removed from a bottle.
+model PourLedger {
+  id            String       @id @default(cuid())
+  vaultBottleId String
+  vaultBottle   VaultBottle  @relation(fields: [vaultBottleId], references: [id])
+  orderId       String?
+  order         Order?       @relation(fields: [orderId], references: [id])
+  deltaMl       Int
+  reason        LedgerReason
+  createdAt     DateTime     @default(now())
+}

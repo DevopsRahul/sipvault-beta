@@ -1,0 +1,84 @@
+# =====================================================================
+# SipVault - BETA single-server stack
+#   caddy    : HTTPS + reverse proxy + serves uploaded images (/media)
+#   web      : Next.js app (customer app, bar portal, admin)
+#   postgres : database
+#   redis    : live order notifications (pub/sub)
+#
+# Start / update:   docker compose up -d --build
+# Logs:             docker compose logs -f web
+# Values like ${POSTGRES_USER} come from the .env file next to this file.
+# =====================================================================
+name: sipvault
+
+services:
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - uploads:/srv/media:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - web
+
+  web:
+    build:
+      context: .
+      args:
+        ASSET_PREFIX: ${ASSET_PREFIX:-}
+    image: sipvault-web:latest
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # These override the localhost values in .env so containers talk to each other.
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      REDIS_URL: redis://redis:6379
+      UPLOAD_DIR: /data/uploads
+      NODE_ENV: production
+    volumes:
+      - uploads:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    # Not published to the internet - only Caddy can reach it.
+    expose:
+      - "3000"
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+
+volumes:
+  uploads:
+  pg_data:
+  redis_data:
+  caddy_data:
+  caddy_config:

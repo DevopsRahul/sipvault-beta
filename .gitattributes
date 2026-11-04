@@ -1,0 +1,5 @@
+# Shell scripts must keep Linux (LF) line endings or they fail inside containers / on the server.
+* text=auto
+*.sh text eol=lf
+Caddyfile text eol=lf
+Dockerfile text eol=lf
