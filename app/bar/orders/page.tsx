@@ -2,7 +2,7 @@ import { updateOrderStatus } from "@/app/actions/orders";
 import { LiveRefresh } from "@/components/LiveRefresh";
 import { StatusBadge } from "@/components/StatusBadge";
 import { db } from "@/lib/db";
-import { timeOnly } from "@/lib/format";
+import { pourLabel, timeOnly } from "@/lib/format";
 import { requireBarUser } from "@/lib/session";
 
 export default async function BarOrdersPage() {
@@ -39,11 +39,12 @@ export default async function BarOrdersPage() {
                 <span className="text-2xl font-bold">Table {o.table.tableNo}</span>
                 <StatusBadge status={o.status} />
               </div>
+              <p className="text-xl font-bold text-amber-400">{pourLabel(o.pourMl, o.vaultBottle.pegSizeMl)}</p>
               <p className="font-semibold">
-                {o.pegs} × {o.vaultBottle.pegSizeMl} ml — {o.vaultBottle.product.brand} {o.vaultBottle.product.name}
+                {o.vaultBottle.product.brand} {o.vaultBottle.product.name}
               </p>
               <p className="text-sm text-neutral-400">
-                {o.user.name} · {timeOnly(o.createdAt)} · bottle has {o.vaultBottle.remainingMl} ml
+                {o.user.name} · {timeOnly(o.createdAt)} · bottle has {o.vaultBottle.remainingMl} ml, {o.vaultBottle.remainingMl - o.pourMl} ml after this pour
               </p>
               {o.note && <p className="rounded bg-neutral-800 p-2 text-sm">“{o.note}”</p>}
               <div className="flex gap-2 pt-1">
@@ -70,7 +71,7 @@ export default async function BarOrdersPage() {
           {done.map((o) => (
             <li key={o.id} className="flex items-center justify-between p-3 text-sm">
               <span>
-                Table {o.table.tableNo} · {o.pegs} × {o.vaultBottle.product.brand} {o.vaultBottle.product.name} · {o.user.name}
+                Table {o.table.tableNo} · {o.pourMl} ml {o.vaultBottle.product.brand} {o.vaultBottle.product.name} · {o.user.name}
               </span>
               <span className="flex items-center gap-2 text-neutral-500">
                 {timeOnly(o.updatedAt)} <StatusBadge status={o.status} />

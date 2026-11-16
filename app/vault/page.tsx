@@ -2,9 +2,10 @@ import Link from "next/link";
 import { cancelOrder } from "@/app/actions/orders";
 import { BottleGauge } from "@/components/BottleGauge";
 import { LiveRefresh } from "@/components/LiveRefresh";
+import { OrderForm } from "@/components/OrderForm";
 import { StatusBadge } from "@/components/StatusBadge";
 import { db } from "@/lib/db";
-import { date, dateTime } from "@/lib/format";
+import { date, dateTime, pourLabel } from "@/lib/format";
 import { requireUser } from "@/lib/session";
 import { mediaUrl } from "@/lib/storage";
 
@@ -28,6 +29,13 @@ export default async function VaultPage({ searchParams }: { searchParams: Promis
 
   const now = new Date();
 
+  // Tables of every bar where the customer keeps a bottle (for the "Order now" form).
+  const barIds = [...new Set(bottles.map((b) => b.barId))];
+  const tables = barIds.length
+    ? await db.barTable.findMany({ where: { barId: { in: barIds } }, select: { id: true, barId: true, tableNo: true } })
+    : [];
+  tables.sort((a, b) => a.tableNo.localeCompare(b.tableNo, undefined, { numeric: true }));
+
   return (
     <div className="space-y-8">
       <LiveRefresh />
@@ -48,10 +56,11 @@ export default async function VaultPage({ searchParams }: { searchParams: Promis
       {bottles.length === 0 ? (
         <div className="card text-neutral-400">Your vault is empty. Buy your first bottle to get started.</div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <div className="grid gap-4 sm:grid-cols-2">
           {bottles.map((b) => {
             const expired = b.expiresAt != null && b.expiresAt < now;
-            const available = b.remainingMl - b.reservedMl;
+            const available = Math.max(b.remainingMl - b.reservedMl, 0);
+            const canOrder = b.status === "ACTIVE" && !expired;
             const img = mediaUrl(b.product.imageKey);
             return (
               <div key={b.id} className={`card flex gap-4 ${b.status !== "ACTIVE" || expired ? "opacity-50" : ""}`}>
@@ -63,15 +72,25 @@ export default async function VaultPage({ searchParams }: { searchParams: Promis
                   </p>
                   <p className="text-sm text-neutral-400">{b.bar.name}</p>
                   <p className="text-sm">
-                    <span className="text-amber-400">{b.remainingMl} ml</span> / {b.totalMl} ml
+                    <span className="text-lg font-bold text-amber-400">{available} ml</span> left of {b.totalMl} ml
                   </p>
                   <p className="text-xs text-neutral-400">
-                    ≈ {Math.floor(Math.max(available, 0) / b.pegSizeMl)} pegs of {b.pegSizeMl} ml left
-                    {b.reservedMl > 0 && ` · ${b.reservedMl} ml on the way`}
+                    ≈ {Math.floor(available / b.pegSizeMl)} pegs of {b.pegSizeMl} ml
+                    {b.reservedMl > 0 && ` · ${b.reservedMl} ml ordered, waiting for the bar`}
                   </p>
                   <p className="text-xs text-neutral-500">
                     {b.status === "EMPTY" ? "Finished" : expired ? "Expired" : b.expiresAt ? `Kept until ${date(b.expiresAt)}` : ""}
                   </p>
+                  {canOrder && (
+                    <div className="pt-2">
+                      <OrderForm
+                        bottleId={b.id}
+                        pegSizeMl={b.pegSizeMl}
+                        availableMl={available}
+                        tables={tables.filter((t) => t.barId === b.barId)}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             );
@@ -89,7 +108,7 @@ export default async function VaultPage({ searchParams }: { searchParams: Promis
               <li key={o.id} className="flex flex-wrap items-center justify-between gap-2 p-3 text-sm">
                 <div>
                   <p>
-                    {o.pegs} × {o.vaultBottle.pegSizeMl} ml {o.vaultBottle.product.brand} {o.vaultBottle.product.name}
+                    {pourLabel(o.pourMl, o.vaultBottle.pegSizeMl)} {o.vaultBottle.product.brand} {o.vaultBottle.product.name}
                   </p>
                   <p className="text-xs text-neutral-500">
                     {o.bar.name} · Table {o.table.tableNo} · {dateTime(o.createdAt)}
