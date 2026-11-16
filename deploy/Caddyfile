@@ -1,27 +1,20 @@
-# Caddy automatically gets and renews a free HTTPS certificate (Let's Encrypt) for {$DOMAIN}.
-# DOMAIN comes from .env (e.g. sipvault.example.com). Use DOMAIN=:80 to test on a bare IP over HTTP.
-
-{$DOMAIN} {
+# HTTP-only config for testing on an IP / EC2 public DNS (no domain yet).
+:80 {
 	encode zstd gzip
 
-	# Uploaded images: served straight from the Docker volume, cached for a year.
-	# (In PROD this traffic moves to S3 + CloudFront instead.)
 	handle_path /media/* {
 		root * /srv/media
 		header Cache-Control "public, max-age=31536000, immutable"
 		file_server
 	}
 
-	# Everything else -> Next.js
 	handle {
 		reverse_proxy web:3000 {
-			# flush immediately so live order updates (Server-Sent Events) aren't buffered
 			flush_interval -1
 		}
 	}
 
 	header {
-		Strict-Transport-Security "max-age=31536000"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "strict-origin-when-cross-origin"
