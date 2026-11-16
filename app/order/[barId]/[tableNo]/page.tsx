@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { placeOrder } from "@/app/actions/orders";
-import { ActionForm } from "@/components/ActionForm";
 import { BottleGauge } from "@/components/BottleGauge";
+import { OrderForm } from "@/components/OrderForm";
 import { LiveRefresh } from "@/components/LiveRefresh";
 import { StatusBadge } from "@/components/StatusBadge";
 import { db } from "@/lib/db";
-import { timeOnly } from "@/lib/format";
+import { pourLabel, timeOnly } from "@/lib/format";
 import { requireUser } from "@/lib/session";
 
 /**
@@ -56,7 +55,7 @@ export default async function OrderPage({ params }: { params: Promise<{ barId: s
       ) : (
         <div className="grid gap-4 sm:grid-cols-2">
           {bottles.map((b) => {
-            const pegsLeft = Math.floor((b.remainingMl - b.reservedMl) / b.pegSizeMl);
+            const availableMl = Math.max(b.remainingMl - b.reservedMl, 0);
             return (
               <div key={b.id} className="card flex gap-4">
                 <BottleGauge id={b.id} totalMl={b.totalMl} remainingMl={b.remainingMl} reservedMl={b.reservedMl} />
@@ -65,27 +64,15 @@ export default async function OrderPage({ params }: { params: Promise<{ barId: s
                     {b.product.brand} {b.product.name}
                   </p>
                   <p className="text-sm text-neutral-400">
-                    {b.remainingMl} ml left · {pegsLeft} pegs available
+                    <span className="text-amber-400">{availableMl} ml left</span> of {b.totalMl} ml
+                    {b.reservedMl > 0 && ` · ${b.reservedMl} ml being poured`}
                   </p>
-                  {pegsLeft > 0 ? (
-                    <ActionForm action={placeOrder} className="space-y-2">
-                      <input type="hidden" name="bottleId" value={b.id} />
-                      <input type="hidden" name="tableId" value={table.id} />
-                      <select name="pegs" className="input" defaultValue="1">
-                        {[1, 2, 3, 4]
-                          .filter((n) => n <= pegsLeft)
-                          .map((n) => (
-                            <option key={n} value={n}>
-                              {n} peg{n > 1 ? "s" : ""} ({n * b.pegSizeMl} ml)
-                            </option>
-                          ))}
-                      </select>
-                      <input name="note" className="input" placeholder="Note: on the rocks, with soda…" maxLength={200} />
-                      <button className="btn-primary w-full">Order to table {table.tableNo}</button>
-                    </ActionForm>
-                  ) : (
-                    <p className="text-sm text-neutral-500">Not enough left for another peg.</p>
-                  )}
+                  <OrderForm
+                    bottleId={b.id}
+                    pegSizeMl={b.pegSizeMl}
+                    availableMl={availableMl}
+                    fixedTable={{ id: table.id, tableNo: table.tableNo }}
+                  />
                 </div>
               </div>
             );
@@ -100,7 +87,7 @@ export default async function OrderPage({ params }: { params: Promise<{ barId: s
             {orders.map((o) => (
               <li key={o.id} className="flex items-center justify-between p-3 text-sm">
                 <span>
-                  {o.pegs} × {o.vaultBottle.product.brand} · Table {o.table.tableNo} · {timeOnly(o.createdAt)}
+                  {pourLabel(o.pourMl, o.vaultBottle.pegSizeMl)} {o.vaultBottle.product.brand} · Table {o.table.tableNo} · {timeOnly(o.createdAt)}
                 </span>
                 <StatusBadge status={o.status} />
               </li>

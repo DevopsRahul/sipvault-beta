@@ -8,15 +8,19 @@ import { channels, publish } from "@/lib/redis";
 import { requireBarUser, requireUser } from "@/lib/session";
 import type { FormState } from "@/lib/types";
 
+/** Largest single pour a customer can order at once. */
+const MAX_POUR_ML = 300;
+
 const orderSchema = z.object({
   bottleId: z.string().min(1),
-  tableId: z.string().min(1),
-  pegs: z.coerce.number().int().min(1).max(4),
+  tableId: z.string().min(1, "Choose your table"),
+  ml: z.coerce.number().int().min(1).max(MAX_POUR_ML),
   note: z.string().trim().max(200).optional(),
 });
 
 /**
- * Customer orders pegs from a vault bottle.
+ * Customer orders an amount in ml (e.g. 90 ml) from a vault bottle.
+ * The amount must be a whole number of pegs for that bottle (30 ml peg -> 30, 60, 90 ...).
  * The ml is RESERVED atomically in a single SQL UPDATE, so two quick taps (or two phones)
  * can never order more than what is left in the bottle.
  */
@@ -25,11 +29,11 @@ export async function placeOrder(_prev: FormState, fd: FormData): Promise<FormSt
   const parsed = orderSchema.safeParse({
     bottleId: fd.get("bottleId"),
     tableId: fd.get("tableId"),
-    pegs: fd.get("pegs"),
+    ml: fd.get("ml"),
     note: fd.get("note") || undefined,
   });
-  if (!parsed.success) return { error: "Invalid order." };
-  const { bottleId, tableId, pegs, note } = parsed.data;
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message || "Invalid order." };
+  const { bottleId, tableId, ml, note } = parsed.data;
 
   const bottle = await db.vaultBottle.findFirst({
     where: { id: bottleId, userId: user.id },
@@ -40,7 +44,11 @@ export async function placeOrder(_prev: FormState, fd: FormData): Promise<FormSt
   const table = await db.barTable.findFirst({ where: { id: tableId, barId: bottle.barId } });
   if (!table) return { error: "This bottle is kept at a different bar." };
 
-  const pourMl = pegs * bottle.pegSizeMl;
+  if (ml % bottle.pegSizeMl !== 0) {
+    return { error: `Order in steps of ${bottle.pegSizeMl} ml.` };
+  }
+  const pourMl = ml;
+  const pegs = ml / bottle.pegSizeMl;
 
   const order = await db.$transaction(async (tx) => {
     const reserved = await tx.$executeRaw`
@@ -69,7 +77,10 @@ export async function placeOrder(_prev: FormState, fd: FormData): Promise<FormSt
 
   await publish(channels.bar(bottle.barId), { type: "order_placed", orderId: order.id, tableNo: table.tableNo });
   revalidatePath("/", "layout");
-  return { ok: `Order sent: ${pegs} × ${bottle.pegSizeMl} ml ${bottle.product.brand} ${bottle.product.name} to table ${table.tableNo}.` };
+  const left = bottle.remainingMl - bottle.reservedMl - pourMl;
+  return {
+    ok: `Order sent: ${pourMl} ml ${bottle.product.brand} ${bottle.product.name} to table ${table.tableNo}. ${left} ml left in your bottle.`,
+  };
 }
 
 /** Customer cancels an order the bar has not accepted yet. */

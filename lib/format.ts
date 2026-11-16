@@ -17,3 +17,9 @@ export function date(d: Date) {
 export function timeOnly(d: Date) {
   return d.toLocaleTimeString("en-IN", { timeZone, timeStyle: "short" });
 }
+
+/** 90, 30 -> "90 ml (3 pegs)" */
+export function pourLabel(pourMl: number, pegSizeMl: number) {
+  const pegs = pourMl / pegSizeMl;
+  return Number.isInteger(pegs) ? `${pourMl} ml (${pegs} peg${pegs === 1 ? "" : "s"})` : `${pourMl} ml`;
+}
